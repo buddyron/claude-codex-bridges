@@ -17,7 +17,7 @@
     "node": ">=20"
   },
   "bin": {
-    "codex-imagegen": "./bin/codex-imagegen.js"
+    "codex-imagegen": "bin/codex-imagegen.js"
   },
   "files": [
     "bin",

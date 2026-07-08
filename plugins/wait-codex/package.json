@@ -17,7 +17,7 @@
     "node": ">=20"
   },
   "bin": {
-    "wait-codex": "./bin/wait-codex.js"
+    "wait-codex": "bin/wait-codex.js"
   },
   "files": [
     "bin",
