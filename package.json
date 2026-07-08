@@ -3,6 +3,14 @@
   "private": true,
   "version": "0.1.0",
   "description": "Open-source bridges that let Claude Code trigger Codex CLI workflows.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/buddyron/claude-codex-bridges.git"
+  },
+  "homepage": "https://github.com/buddyron/claude-codex-bridges#readme",
+  "bugs": {
+    "url": "https://github.com/buddyron/claude-codex-bridges/issues"
+  },
   "workspaces": [
     "plugins/*"
   ],

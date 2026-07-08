@@ -3,6 +3,19 @@
   "version": "0.1.0",
   "description": "Generate images through Codex's local imagegen CLI.",
   "license": "MIT",
+  "author": "Ron",
+  "homepage": "https://github.com/buddyron/claude-codex-bridges/tree/main/plugins/codex-imagegen#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/buddyron/claude-codex-bridges.git",
+    "directory": "plugins/codex-imagegen"
+  },
+  "bugs": {
+    "url": "https://github.com/buddyron/claude-codex-bridges/issues"
+  },
+  "engines": {
+    "node": ">=20"
+  },
   "bin": {
     "codex-imagegen": "./bin/codex-imagegen.js"
   },
@@ -10,7 +23,8 @@
     "bin",
     "lib",
     "skills",
-    ".claude-plugin"
+    ".claude-plugin",
+    "LICENSE"
   ],
   "scripts": {
     "test": "node --test ./test/*.test.js"
