@@ -1,6 +1,6 @@
 {
   "name": "codex-imagegen",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Generate images through Codex's local imagegen CLI.",
   "license": "MIT",
   "author": "Ron",

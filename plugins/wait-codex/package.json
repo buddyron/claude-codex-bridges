@@ -1,6 +1,6 @@
 {
   "name": "wait-codex",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Watch a GitHub PR until Codex finishes reviewing it.",
   "license": "MIT",
   "author": "Ron",
