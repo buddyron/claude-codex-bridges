@@ -1,0 +1,24 @@
+{
+  "name": "wait-codex",
+  "version": "0.1.0",
+  "description": "Watch a GitHub PR until Codex finishes reviewing it.",
+  "license": "MIT",
+  "bin": {
+    "wait-codex": "./bin/wait-codex.js"
+  },
+  "files": [
+    "bin",
+    "lib",
+    "skills",
+    ".claude-plugin"
+  ],
+  "scripts": {
+    "test": "node --test ./test/*.test.js"
+  },
+  "keywords": [
+    "codex",
+    "github",
+    "pull-request",
+    "review"
+  ]
+}

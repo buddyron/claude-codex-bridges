@@ -1,0 +1,9 @@
+{
+  "name": "wait-codex",
+  "version": "0.1.0",
+  "description": "Watch a GitHub PR until Codex finishes reviewing it.",
+  "author": {
+    "name": "Ron"
+  },
+  "license": "MIT"
+}

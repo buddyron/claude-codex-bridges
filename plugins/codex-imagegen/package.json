@@ -1,0 +1,24 @@
+{
+  "name": "codex-imagegen",
+  "version": "0.1.0",
+  "description": "Generate images through Codex's local imagegen CLI.",
+  "license": "MIT",
+  "bin": {
+    "codex-imagegen": "./bin/codex-imagegen.js"
+  },
+  "files": [
+    "bin",
+    "lib",
+    "skills",
+    ".claude-plugin"
+  ],
+  "scripts": {
+    "test": "node --test ./test/*.test.js"
+  },
+  "keywords": [
+    "codex",
+    "imagegen",
+    "claude-code",
+    "image-generation"
+  ]
+}

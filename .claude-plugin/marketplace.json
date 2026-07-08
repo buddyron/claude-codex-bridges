@@ -1,0 +1,29 @@
+{
+  "name": "claude-codex-bridges",
+  "owner": {
+    "name": "Ron"
+  },
+  "interface": {
+    "displayName": "Claude Codex Bridges"
+  },
+  "plugins": [
+    {
+      "name": "codex-imagegen",
+      "description": "Generate images through Codex's local imagegen CLI, including multiple reference images.",
+      "author": {
+        "name": "Ron"
+      },
+      "source": "./plugins/codex-imagegen",
+      "category": "design"
+    },
+    {
+      "name": "wait-codex",
+      "description": "Watch a GitHub PR until Codex finishes reviewing it.",
+      "author": {
+        "name": "Ron"
+      },
+      "source": "./plugins/wait-codex",
+      "category": "development"
+    }
+  ]
+}

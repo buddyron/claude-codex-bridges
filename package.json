@@ -1,0 +1,16 @@
+{
+  "name": "claude-codex-bridges",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Open-source bridges that let Claude Code trigger Codex CLI workflows.",
+  "workspaces": [
+    "plugins/*"
+  ],
+  "scripts": {
+    "test": "npm run test --workspaces --if-present",
+    "test:smoke": "node ./scripts/run-smoke-tests.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
