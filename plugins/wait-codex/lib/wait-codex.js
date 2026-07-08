@@ -1,3 +1,5 @@
+const path = require("node:path");
+const fs = require("node:fs");
 const { execFileSync } = require("node:child_process");
 
 const HELP_TEXT = `wait-codex - watch a PR until Codex finishes reviewing it.
@@ -107,6 +109,16 @@ function parseArgs(argv) {
   }
 
   return options;
+}
+
+function commandExistsOnPath(command, { env = process.env, platform = process.platform, existsSyncImpl = fs.existsSync } = {}) {
+  const pathValue = env.PATH || env.Path || "";
+  const directories = pathValue.split(path.delimiter).filter(Boolean);
+  const extensions = platform === "win32" ? (env.PATHEXT || ".EXE;.CMD;.BAT;.COM").split(";") : [""];
+
+  return directories.some((directory) =>
+    extensions.some((extension) => existsSyncImpl(path.join(directory, command + extension)))
+  );
 }
 
 function isBotUser(user) {
@@ -320,11 +332,19 @@ async function runCli(argv, dependencies = {}) {
   const stderr = dependencies.stderr || process.stderr;
   const sleepImpl = dependencies.sleepImpl || defaultSleep;
   const ghClient = dependencies.ghClient || createGhClient(dependencies);
+  const commandExistsImpl = dependencies.commandExistsImpl || commandExistsOnPath;
+  const env = dependencies.env || process.env;
 
   const options = parseArgs(argv);
   if (options.help) {
     stdout.write(`${HELP_TEXT}\n`);
     return 0;
+  }
+
+  if (!dependencies.ghClient && !commandExistsImpl("gh", { env })) {
+    throw new Error(
+      "GitHub CLI (`gh`) was not found on PATH. Install it from https://cli.github.com and run `gh auth login`, then try again."
+    );
   }
 
   const target = await resolveTarget(options, ghClient);
@@ -395,6 +415,7 @@ async function runCli(argv, dependencies = {}) {
 module.exports = {
   HELP_TEXT,
   buildReviewPayload,
+  commandExistsOnPath,
   createGhClient,
   filterReactionsSince,
   filterReviewsSince,

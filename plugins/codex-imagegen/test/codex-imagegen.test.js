@@ -7,6 +7,7 @@ const { spawnSync } = require("node:child_process");
 
 const {
   buildImagegenArgs,
+  commandExistsOnPath,
   normalizeImageInputs,
   parseArgs,
   resolvePrompt,
@@ -109,6 +110,7 @@ test("runCli forwards stdin prompt and multiple images to imagegen", async () =>
   const status = await runCli(["--image", "a.png", "--images", "b.png,c.png"], {
     readStdinImpl: async () => "Prompt from stdin",
     existsSyncImpl: () => true,
+    commandExistsImpl: () => true,
     spawnSyncImpl(command, args) {
       calls.push({ command, args });
       return { status: 0 };
@@ -134,10 +136,40 @@ test("runCli rejects missing reference image paths", async () => {
   await assert.rejects(
     () =>
       runCli(["--image", "missing.png", "prompt"], {
-        existsSyncImpl: () => false
+        existsSyncImpl: () => false,
+        commandExistsImpl: () => true
       }),
     /Reference image not found/
   );
+});
+
+test("runCli reports a clear error when the imagegen CLI is missing from PATH", async () => {
+  await assert.rejects(
+    () =>
+      runCli(["prompt"], {
+        existsSyncImpl: () => true,
+        commandExistsImpl: () => false
+      }),
+    /Codex's `imagegen` CLI was not found on PATH/
+  );
+});
+
+test("commandExistsOnPath finds an executable in one of the PATH directories", () => {
+  const found = commandExistsOnPath("imagegen", {
+    env: { PATH: ["/no/such/dir", "/usr/bin"].join(require("node:path").delimiter) },
+    platform: "darwin",
+    existsSyncImpl: (candidate) => candidate === "/usr/bin/imagegen"
+  });
+
+  assert.equal(found, true);
+
+  const notFound = commandExistsOnPath("imagegen", {
+    env: { PATH: "/usr/bin" },
+    platform: "darwin",
+    existsSyncImpl: () => false
+  });
+
+  assert.equal(notFound, false);
 });
 
 test("CLI entrypoint works with a fake imagegen binary", () => {

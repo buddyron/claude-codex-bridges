@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 
 const {
   buildReviewPayload,
+  commandExistsOnPath,
   formatEventLine,
   parseArgs,
   resolveInitialState,
@@ -197,4 +198,32 @@ test("runCli polls until it sees REVIEWING and DONE:lgtm", async () => {
   assert.equal(output[0], "STARTED: watching PR #42 in example/repo\n");
   assert.equal(output[1], "REVIEWING: eyes added by codex[bot]\n");
   assert.equal(output[2], "DONE:lgtm:codex[bot]\n");
+});
+
+test("runCli reports a clear error when the gh CLI is missing from PATH", async () => {
+  await assert.rejects(
+    () =>
+      runCli([], {
+        commandExistsImpl: () => false
+      }),
+    /GitHub CLI \(`gh`\) was not found on PATH/
+  );
+});
+
+test("commandExistsOnPath finds an executable in one of the PATH directories", () => {
+  const found = commandExistsOnPath("gh", {
+    env: { PATH: ["/no/such/dir", "/usr/bin"].join(require("node:path").delimiter) },
+    platform: "darwin",
+    existsSyncImpl: (candidate) => candidate === "/usr/bin/gh"
+  });
+
+  assert.equal(found, true);
+
+  const notFound = commandExistsOnPath("gh", {
+    env: { PATH: "/usr/bin" },
+    platform: "darwin",
+    existsSyncImpl: () => false
+  });
+
+  assert.equal(notFound, false);
 });

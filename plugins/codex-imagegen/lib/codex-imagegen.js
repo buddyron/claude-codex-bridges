@@ -1,4 +1,5 @@
 const fs = require("node:fs");
+const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 
 const HELP_TEXT = `codex-imagegen - run Codex's local imagegen CLI.
@@ -217,6 +218,16 @@ function resolvePrompt(options, stdinText) {
   throw new Error("Missing prompt. Pass --prompt, a positional prompt, or pipe the prompt on stdin.");
 }
 
+function commandExistsOnPath(command, { env = process.env, platform = process.platform, existsSyncImpl = fs.existsSync } = {}) {
+  const pathValue = env.PATH || env.Path || "";
+  const directories = pathValue.split(path.delimiter).filter(Boolean);
+  const extensions = platform === "win32" ? (env.PATHEXT || ".EXE;.CMD;.BAT;.COM").split(";") : [""];
+
+  return directories.some((directory) =>
+    extensions.some((extension) => existsSyncImpl(path.join(directory, command + extension)))
+  );
+}
+
 function assertImageFilesExist(images, existsSyncImpl = fs.existsSync) {
   for (const imagePath of images) {
     if (!existsSyncImpl(imagePath)) {
@@ -302,11 +313,19 @@ async function runCli(argv, dependencies = {}) {
   const readStdinImpl = dependencies.readStdinImpl || defaultReadStdin;
   const existsSyncImpl = dependencies.existsSyncImpl || fs.existsSync;
   const spawnSyncImpl = dependencies.spawnSyncImpl || spawnSync;
+  const commandExistsImpl = dependencies.commandExistsImpl || commandExistsOnPath;
+  const env = dependencies.env || process.env;
 
   const parsed = parseArgs(argv);
   if (parsed.help) {
     stdout.write(`${HELP_TEXT}\n`);
     return 0;
+  }
+
+  if (!commandExistsImpl("imagegen", { env })) {
+    throw new Error(
+      "Codex's `imagegen` CLI was not found on PATH. Install and sign in to the Codex CLI (it provides the `imagegen` command), then try again."
+    );
   }
 
   const stdinText = parsed.prompt || parsed.positionals.length > 0 ? "" : await readStdinImpl(stdin);
@@ -340,6 +359,7 @@ module.exports = {
   HELP_TEXT,
   assertImageFilesExist,
   buildImagegenArgs,
+  commandExistsOnPath,
   normalizeImageInputs,
   parseArgs,
   resolvePrompt,
