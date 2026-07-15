@@ -65,10 +65,12 @@ test("composePrompt instructs a single generation and switches wording for refer
   assert.match(plain, /image_gen tool exactly once/);
   assert.match(plain, /Do NOT save files/);
   assert.match(plain, /SPEC:\na red fox/);
-  assert.match(plain, /Size: 1024x1024/);
+  // Size is phrased as an instruction to call image_gen with that size.
+  assert.match(plain, /Call image_gen with a size of 1024x1024/);
 
   const withRefs = composePrompt({ prompt: "same fox", images: ["ref.png"] });
-  assert.match(withRefs, /Use the attached image\(s\) as references/);
+  assert.match(withRefs, /only as references/);
+  assert.match(withRefs, /generate ONE new image/);
 });
 
 test("buildCodexArgs enables image_gen, adds the gen dir, and places the prompt correctly", () => {
@@ -304,6 +306,47 @@ test("runCli end-to-end: drives codex, extracts the PNG, and writes --out", asyn
   assert.equal(lines[lines.length - 1].trim(), outPath);
   // Session rollout is cleaned up by default.
   assert.ok(!fs.existsSync(rolloutFile));
+});
+
+test("buildCodexArgs wires --output-last-message when a path is given", () => {
+  const args = buildCodexArgs(
+    { model: "gpt-5.5", sandbox: "workspace-write", bypass: false, images: [], composedPrompt: "PROMPT" },
+    { codexCwd: "/tmp/cwd", genDir: "/gen", lastMessagePath: "/tmp/last.txt" }
+  );
+  const flagIndex = args.indexOf("-o");
+  assert.ok(flagIndex >= 0);
+  assert.equal(args[flagIndex + 1], "/tmp/last.txt");
+  // The positional prompt must still come last.
+  assert.equal(args[args.length - 1], "PROMPT");
+});
+
+test("runCli surfaces the agent's final message when no image is produced", async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-imagegen-fail-"));
+  const codexHome = path.join(tempDir, ".codex");
+  fs.mkdirSync(path.join(codexHome, "sessions"), { recursive: true });
+
+  const spawnSyncImpl = (command, args) => {
+    // Simulate a refusal: codex writes an explanation to --output-last-message
+    // and produces no rollout / image.
+    const flagIndex = args.indexOf("-o");
+    fs.writeFileSync(args[flagIndex + 1], "I can't generate that image.");
+    return { status: 0, stdout: "session id: 019f0000-dead\n", stderr: "" };
+  };
+
+  const errors = [];
+  await assert.rejects(
+    () =>
+      runCli(["--out", path.join(tempDir, "out.png"), "a forbidden thing"], {
+        env: { ...process.env, CODEX_HOME: codexHome },
+        commandExistsImpl: () => true,
+        spawnSyncImpl,
+        stdout: { write: () => {} },
+        stderr: { write: (text) => errors.push(text) }
+      }),
+    /No image was produced/
+  );
+
+  assert.ok(errors.join("").includes("I can't generate that image."));
 });
 
 test("commandExistsOnPath finds an executable in one of the PATH directories", () => {

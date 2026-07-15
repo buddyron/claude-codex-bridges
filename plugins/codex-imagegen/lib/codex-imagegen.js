@@ -261,7 +261,7 @@ function composePrompt({ prompt, images = [], size, quality, style }) {
   const hasRefs = images.length > 0;
   const lines = [
     hasRefs
-      ? "Use the attached image(s) as references and call your built-in image_gen tool exactly once to generate ONE image."
+      ? "Use the attached image(s) only as references, and call your built-in image_gen tool exactly once to generate ONE new image (do not return or crop a reference)."
       : "Call your built-in image_gen tool exactly once to generate ONE image matching the spec below.",
     "Do NOT save files, run shell, write code, or report any path — only generate.",
     "",
@@ -269,7 +269,9 @@ function composePrompt({ prompt, images = [], size, quality, style }) {
     prompt
   ];
   if (size) {
-    lines.push(`Size: ${size}`);
+    // Instruct the model to pass the size to the tool; a free-text "Size:" line
+    // is treated as a weak hint and often ignored.
+    lines.push(`Call image_gen with a size of ${size} (use the nearest supported size if that exact size is unavailable).`);
   }
   if (quality) {
     lines.push(`Quality / detail: ${quality}`);
@@ -307,7 +309,7 @@ function resolveOutPath(out, prompt, now = new Date()) {
 // Build the `codex exec` argv. image_gen only registers when the sandbox is
 // writable AND ~/.codex/generated_images is added (--add-dir), on an
 // image-capable model with image_generation enabled.
-function buildCodexArgs(options, { codexCwd, genDir }) {
+function buildCodexArgs(options, { codexCwd, genDir, lastMessagePath }) {
   const args = [
     "exec",
     "--skip-git-repo-check",
@@ -322,6 +324,12 @@ function buildCodexArgs(options, { codexCwd, genDir }) {
     "--add-dir",
     genDir
   ];
+
+  // Capture the agent's final message so we can surface a refusal / wrong-turn
+  // explanation when no image comes back.
+  if (lastMessagePath) {
+    args.push("-o", lastMessagePath);
+  }
 
   if (options.bypass) {
     args.push("--dangerously-bypass-approvals-and-sandbox");
@@ -568,127 +576,154 @@ async function runCli(argv, dependencies = {}) {
   // does not go on a code-writing spree. We never read the image from here.
   const codexCwd = path.join(os.tmpdir(), "imagegen-cwd");
 
-  const codexArgs = buildCodexArgs(
-    { ...runtime, images, composedPrompt },
-    { codexCwd, genDir }
-  );
+  // Per-call scratch dir for OUR files (the agent's last message). Cleaned up
+  // in `finally` regardless of outcome.
+  const mkdtempImpl = dependencies.mkdtempImpl || fs.mkdtempSync;
+  const scratchDir = mkdtempImpl(path.join(os.tmpdir(), "codex-imagegen-"));
+  const lastMessagePath = path.join(scratchDir, "last.txt");
 
-  if (parsed.dryRun) {
-    stderr.write("----- composed prompt -----\n");
-    stderr.write(`${composedPrompt}\n`);
-    stderr.write("----- codex command -----\n");
-    stderr.write(`codex ${codexArgs.join(" ")}\n`);
-    stderr.write("----- would save to -----\n");
-    stderr.write(`${outPath}\n`);
-    return 0;
-  }
+  try {
+    const codexArgs = buildCodexArgs(
+      { ...runtime, images, composedPrompt },
+      { codexCwd, genDir, lastMessagePath }
+    );
 
-  for (const dir of [genDir, sessDir, codexCwd]) {
-    mkdirImpl(dir, { recursive: true });
-  }
+    if (parsed.dryRun) {
+      stderr.write("----- composed prompt -----\n");
+      stderr.write(`${composedPrompt}\n`);
+      stderr.write("----- codex command -----\n");
+      stderr.write(`codex ${codexArgs.join(" ")}\n`);
+      stderr.write("----- would save to -----\n");
+      stderr.write(`${outPath}\n`);
+      return 0;
+    }
 
-  stderr.write(
-    `codex-imagegen: generating via codex image_gen ` +
-      `(sandbox=${runtime.bypass ? "bypass" : runtime.sandbox}, timeout=${runtime.timeout}s)…\n`
-  );
+    for (const dir of [genDir, sessDir, codexCwd]) {
+      mkdirImpl(dir, { recursive: true });
+    }
 
-  const startedAt = now().getTime();
-  const result = spawnSyncImpl("codex", codexArgs, {
-    cwd: codexCwd,
-    env,
-    input: images.length > 0 ? `${composedPrompt}\n` : "",
-    timeout: runtime.timeout * 1000,
-    encoding: "utf8",
-    maxBuffer: 64 * 1024 * 1024
-  });
+    stderr.write(
+      `codex-imagegen: generating via codex image_gen ` +
+        `(sandbox=${runtime.bypass ? "bypass" : runtime.sandbox}, timeout=${runtime.timeout}s)…\n`
+    );
 
-  if (result && result.error) {
-    if (result.error.code === "ETIMEDOUT" || result.signal === "SIGTERM") {
+    const startedAt = now().getTime();
+    const result = spawnSyncImpl("codex", codexArgs, {
+      cwd: codexCwd,
+      env,
+      input: images.length > 0 ? `${composedPrompt}\n` : "",
+      timeout: runtime.timeout * 1000,
+      encoding: "utf8",
+      maxBuffer: 64 * 1024 * 1024
+    });
+
+    if (result && result.error) {
+      if (result.error.code === "ETIMEDOUT" || result.signal === "SIGTERM") {
+        throw new Error(`codex timed out after ${runtime.timeout}s (raise --timeout, or try --bypass).`);
+      }
+      throw new Error(`Failed to start codex: ${result.error.message}`);
+    }
+    if (result && result.signal === "SIGTERM") {
       throw new Error(`codex timed out after ${runtime.timeout}s (raise --timeout, or try --bypass).`);
     }
-    throw new Error(`Failed to start codex: ${result.error.message}`);
-  }
-  if (result && result.signal === "SIGTERM") {
-    throw new Error(`codex timed out after ${runtime.timeout}s (raise --timeout, or try --bypass).`);
-  }
 
-  const log = `${result && result.stdout ? result.stdout : ""}${result && result.stderr ? result.stderr : ""}`;
-  if (parsed.verbose) {
-    stderr.write(log.endsWith("\n") ? log : `${log}\n`);
-  }
-
-  const sid = parseSessionId(log);
-  const rollout = locateRollout(sessDir, sid, startedAt, dependencies);
-
-  let buffer = null;
-  if (rollout) {
-    let rolloutText = "";
-    try {
-      rolloutText = readFileImpl(rollout, "utf8");
-    } catch {
-      rolloutText = "";
+    const log = `${result && result.stdout ? result.stdout : ""}${result && result.stderr ? result.stderr : ""}`;
+    if (parsed.verbose) {
+      stderr.write(log.endsWith("\n") ? log : `${log}\n`);
     }
-    buffer = extractImageFromRollout(rolloutText, { readFileImpl });
-  }
 
-  // Fallback for builds that only write the PNG to disk (no inline base64).
-  if (!buffer) {
-    const disk = findFilesRecursive(genDir, (name) => /\.(png|webp)$/i.test(name))
-      .map((file) => {
-        try {
-          return { file, mtimeMs: fs.statSync(file).mtimeMs };
-        } catch {
-          return null;
-        }
-      })
-      .filter((entry) => entry && entry.mtimeMs >= startedAt)
-      .sort((a, b) => b.mtimeMs - a.mtimeMs)[0];
-    if (disk) {
+    const sid = parseSessionId(log);
+    const rollout = locateRollout(sessDir, sid, startedAt, dependencies);
+
+    let buffer = null;
+    if (rollout) {
+      let rolloutText = "";
       try {
-        const candidate = readFileImpl(disk.file);
-        if (candidate && candidate.length >= 8 && candidate.subarray(0, 8).equals(PNG_SIGNATURE)) {
-          buffer = candidate;
-        }
+        rolloutText = readFileImpl(rollout, "utf8");
       } catch {
-        /* nothing usable on disk */
+        rolloutText = "";
+      }
+      buffer = extractImageFromRollout(rolloutText, { readFileImpl });
+    }
+
+    // Fallback for builds that only write the PNG to disk (no inline base64).
+    if (!buffer) {
+      const disk = findFilesRecursive(genDir, (name) => /\.(png|webp)$/i.test(name))
+        .map((file) => {
+          try {
+            return { file, mtimeMs: fs.statSync(file).mtimeMs };
+          } catch {
+            return null;
+          }
+        })
+        .filter((entry) => entry && entry.mtimeMs >= startedAt)
+        .sort((a, b) => b.mtimeMs - a.mtimeMs)[0];
+      if (disk) {
+        try {
+          const candidate = readFileImpl(disk.file);
+          if (candidate && candidate.length >= 8 && candidate.subarray(0, 8).equals(PNG_SIGNATURE)) {
+            buffer = candidate;
+          }
+        } catch {
+          /* nothing usable on disk */
+        }
       }
     }
-  }
 
-  if (!buffer) {
-    if (!parsed.verbose && log) {
-      stderr.write("----- codex log (tail) -----\n");
-      stderr.write(`${log.split("\n").slice(-30).join("\n")}\n`);
+    if (!buffer) {
+      // Surface the agent's own final message first — when the model refuses or
+      // writes code instead of generating, this says why (far more useful than
+      // guessing "you're not logged in").
+      let lastMessage = "";
+      try {
+        lastMessage = String(readFileImpl(lastMessagePath, "utf8")).trim();
+      } catch {
+        lastMessage = "";
+      }
+      if (lastMessage) {
+        stderr.write("----- codex final message -----\n");
+        stderr.write(`${lastMessage}\n`);
+      } else if (!parsed.verbose && log) {
+        stderr.write("----- codex log (tail) -----\n");
+        stderr.write(`${log.split("\n").slice(-30).join("\n")}\n`);
+      }
+      stderr.write(rollout ? `(rollout: ${rollout})\n` : "(no rollout jsonl found)\n");
+      throw new Error(
+        "No image was produced. The agent may have declined or not called image_gen — see its " +
+          "final message above. Otherwise confirm `codex login status` and that the model is " +
+          "image-capable with a writable sandbox."
+      );
     }
-    stderr.write(rollout ? `(rollout: ${rollout})\n` : "(no rollout jsonl found)\n");
-    throw new Error(
-      "No image was produced. Confirm `codex login status` shows you are logged in and that " +
-        "the model is image-capable with a writable sandbox."
-    );
-  }
 
-  const finalPath = path.resolve(outPath);
-  mkdirImpl(path.dirname(finalPath), { recursive: true });
-  writeFileImpl(finalPath, buffer);
+    const finalPath = path.resolve(outPath);
+    mkdirImpl(path.dirname(finalPath), { recursive: true });
+    writeFileImpl(finalPath, buffer);
 
-  if (!parsed.keepSession && rollout) {
+    if (!parsed.keepSession && rollout) {
+      try {
+        rmImpl(rollout, { force: true });
+      } catch {
+        /* best-effort cleanup */
+      }
+    }
+
+    stderr.write(`codex-imagegen: done (${buffer.length} bytes).\n`);
+    if (parsed.json) {
+      stdout.write(
+        `${JSON.stringify({ ok: true, path: finalPath, bytes: buffer.length, prompt, refs: images.length })}\n`
+      );
+    } else {
+      stdout.write(`${finalPath}\n`);
+    }
+
+    return 0;
+  } finally {
     try {
-      rmImpl(rollout, { force: true });
+      rmImpl(scratchDir, { recursive: true, force: true });
     } catch {
       /* best-effort cleanup */
     }
   }
-
-  stderr.write(`codex-imagegen: done (${buffer.length} bytes).\n`);
-  if (parsed.json) {
-    stdout.write(
-      `${JSON.stringify({ ok: true, path: finalPath, bytes: buffer.length, prompt, refs: images.length })}\n`
-    );
-  } else {
-    stdout.write(`${finalPath}\n`);
-  }
-
-  return 0;
 }
 
 module.exports = {
