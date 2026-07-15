@@ -7,7 +7,7 @@
   "plugins": [
     {
       "name": "codex-imagegen",
-      "description": "Generate images through Codex's local imagegen CLI, including multiple reference images.",
+      "description": "Generate images through Codex's built-in image_gen tool, including multiple reference images.",
       "author": {
         "name": "Ron"
       },

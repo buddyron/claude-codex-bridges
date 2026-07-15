@@ -1,6 +1,6 @@
 ---
 name: codex-imagegen
-description: Generate images by calling Codex's local imagegen CLI. Use this whenever the user wants Claude Code to trigger image generation through Codex, especially when one or more reference images should be attached.
+description: Generate images by driving Codex's built-in image_gen tool. Use this whenever the user wants Claude Code to trigger image generation through Codex, especially when one or more reference images should be attached.
 ---
 
 # codex-imagegen
@@ -9,9 +9,12 @@ Use `codex-imagegen` when the user wants image output generated through the loca
 
 ## What it does
 
-- forwards a prompt to Codex's `imagegen` CLI
+- drives a `codex exec` session that calls Codex's built-in `image_gen` tool once
+- extracts the generated PNG from the session rollout and writes it to `--out`
 - supports one or many reference images
 - works well for style transfer, character consistency, and composition guidance
+
+Requires the `codex` CLI on `PATH`, signed in via `codex login`.
 
 ## Preferred command
 

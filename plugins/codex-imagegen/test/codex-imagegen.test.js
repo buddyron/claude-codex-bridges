@@ -6,14 +6,29 @@ const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 
 const {
-  buildImagegenArgs,
+  buildCodexArgs,
   commandExistsOnPath,
+  composePrompt,
+  decodePng,
+  extractImageFromRollout,
+  locateRollout,
   normalizeImageInputs,
   parseArgs,
+  parseSessionId,
+  resolveOutPath,
   resolvePrompt,
+  resolveRuntimeOptions,
   runCli,
+  slugify,
   splitImageList
 } = require("../lib/codex-imagegen");
+
+// A minimal 1x1 PNG used across extraction tests.
+const ONE_PX_PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgYGAAAAAEAAH2FzhVAAAAAElFTkSuQmCC",
+  "base64"
+);
+const ONE_PX_PNG_B64 = ONE_PX_PNG.toString("base64");
 
 test("splitImageList supports comma-separated and newline-separated values", () => {
   assert.deepEqual(splitImageList("a.png, b.png\nc.png"), ["a.png", "b.png", "c.png"]);
@@ -45,58 +60,92 @@ test("normalizeImageInputs preserves order across image flags", () => {
   assert.deepEqual(images, ["a.png", "b.png", "c.png", "d.png"]);
 });
 
-test("buildImagegenArgs repeats --image for each reference", () => {
-  const args = buildImagegenArgs({
-    out: "out.png",
-    images: ["a.png", "b.png"],
-    size: "1536x1024",
-    quality: "high",
-    style: "comic",
-    model: "gpt-5.5",
-    sandbox: "workspace-write",
-    timeout: "30",
-    bypass: true,
-    json: true,
-    keepSession: true,
-    verbose: true,
-    dryRun: true,
-    prompt: "hello"
-  });
+test("composePrompt instructs a single generation and switches wording for references", () => {
+  const plain = composePrompt({ prompt: "a red fox", images: [], size: "1024x1024" });
+  assert.match(plain, /image_gen tool exactly once/);
+  assert.match(plain, /Do NOT save files/);
+  assert.match(plain, /SPEC:\na red fox/);
+  assert.match(plain, /Size: 1024x1024/);
 
-  assert.deepEqual(args, [
-    "--out",
-    "out.png",
-    "--image",
-    "a.png",
-    "--image",
-    "b.png",
-    "--size",
-    "1536x1024",
-    "--quality",
-    "high",
-    "--style",
-    "comic",
+  const withRefs = composePrompt({ prompt: "same fox", images: ["ref.png"] });
+  assert.match(withRefs, /Use the attached image\(s\) as references/);
+});
+
+test("buildCodexArgs enables image_gen, adds the gen dir, and places the prompt correctly", () => {
+  const genDir = "/home/user/.codex/generated_images";
+  const codexCwd = "/tmp/imagegen-cwd";
+
+  const plain = buildCodexArgs(
+    { model: "gpt-5.5", sandbox: "workspace-write", bypass: false, images: [], composedPrompt: "PROMPT" },
+    { codexCwd, genDir }
+  );
+  assert.deepEqual(plain, [
+    "exec",
+    "--skip-git-repo-check",
+    "--color",
+    "never",
+    "--cd",
+    codexCwd,
     "--model",
     "gpt-5.5",
+    "--enable",
+    "image_generation",
+    "--add-dir",
+    genDir,
     "--sandbox",
     "workspace-write",
-    "--timeout",
-    "30",
-    "--bypass",
-    "--json",
-    "--keep-session",
-    "--verbose",
-    "--dry-run",
-    "--prompt",
-    "hello"
+    "PROMPT"
   ]);
+
+  const withRefs = buildCodexArgs(
+    { model: "gpt-5.5", sandbox: "workspace-write", bypass: true, images: ["a.png", "b.png"], composedPrompt: "PROMPT" },
+    { codexCwd, genDir }
+  );
+  // bypass replaces --sandbox; refs are attached; no trailing positional prompt.
+  assert.ok(withRefs.includes("--dangerously-bypass-approvals-and-sandbox"));
+  assert.ok(!withRefs.includes("--sandbox"));
+  assert.deepEqual(withRefs.slice(-4), ["-i", "a.png", "-i", "b.png"]);
+  assert.ok(!withRefs.includes("PROMPT"));
+});
+
+test("resolveRuntimeOptions applies defaults, env overrides, and CLI precedence", () => {
+  assert.deepEqual(resolveRuntimeOptions({ model: null, sandbox: null, timeout: null, bypass: false }, {}), {
+    model: "gpt-5.5",
+    sandbox: "workspace-write",
+    timeout: 360,
+    bypass: false
+  });
+
+  assert.deepEqual(
+    resolveRuntimeOptions(
+      { model: null, sandbox: null, timeout: null, bypass: false },
+      { IMAGEGEN_MODEL: "gpt-x", IMAGEGEN_SANDBOX: "danger-full-access", IMAGEGEN_TIMEOUT: "90", IMAGEGEN_BYPASS: "1" }
+    ),
+    { model: "gpt-x", sandbox: "danger-full-access", timeout: 90, bypass: true }
+  );
+
+  // Explicit CLI values win over env.
+  assert.equal(
+    resolveRuntimeOptions({ model: "cli-model", sandbox: null, timeout: null, bypass: false }, { IMAGEGEN_MODEL: "env-model" }).model,
+    "cli-model"
+  );
+});
+
+test("resolveOutPath appends .png and falls back to a slug + timestamp", () => {
+  assert.equal(resolveOutPath("assets/hero", "x"), "assets/hero.png");
+  assert.equal(resolveOutPath("assets/hero.PNG", "x"), "assets/hero.PNG");
+
+  const fixed = new Date(2026, 6, 16, 9, 8, 7);
+  assert.equal(resolveOutPath(null, "A Red Fox!", fixed), "./a-red-fox-20260716-090807.png");
+});
+
+test("slugify normalizes and truncates prompts", () => {
+  assert.equal(slugify("A Red Fox!"), "a-red-fox");
+  assert.equal(slugify("!!!"), "image");
 });
 
 test("resolvePrompt prefers explicit prompt and rejects ambiguous input", () => {
-  assert.equal(
-    resolvePrompt({ prompt: "explicit", positionals: [] }, ""),
-    "explicit"
-  );
+  assert.equal(resolvePrompt({ prompt: "explicit", positionals: [] }, ""), "explicit");
 
   assert.throws(
     () => resolvePrompt({ prompt: "explicit", positionals: ["positional"] }, ""),
@@ -104,32 +153,93 @@ test("resolvePrompt prefers explicit prompt and rejects ambiguous input", () => 
   );
 });
 
-test("runCli forwards stdin prompt and multiple images to imagegen", async () => {
-  const calls = [];
+test("parseSessionId returns the last session id found in codex output", () => {
+  const log = "session id: 019f0000-aaaa\nnoise\nsession id: 019f67c5-bfbf-7660-b2ac-5e9c8ac2fea4\n";
+  assert.equal(parseSessionId(log), "019f67c5-bfbf-7660-b2ac-5e9c8ac2fea4");
+  assert.equal(parseSessionId("nothing here"), null);
+});
 
-  const status = await runCli(["--image", "a.png", "--images", "b.png,c.png"], {
-    readStdinImpl: async () => "Prompt from stdin",
-    existsSyncImpl: () => true,
-    commandExistsImpl: () => true,
-    spawnSyncImpl(command, args) {
-      calls.push({ command, args });
-      return { status: 0 };
+test("decodePng accepts real PNG bytes and rejects non-PNG data", () => {
+  assert.ok(decodePng(ONE_PX_PNG_B64));
+  assert.equal(decodePng(Buffer.from("not a png").toString("base64")), null);
+});
+
+test("extractImageFromRollout reads the new image_generation_end base64 schema", () => {
+  const rollout = [
+    JSON.stringify({ type: "event_msg", payload: { type: "user_message", message: "x" } }),
+    JSON.stringify({
+      type: "event_msg",
+      payload: { type: "image_generation_end", status: "completed", result: ONE_PX_PNG_B64, saved_path: "/does/not/exist.png" }
+    })
+  ].join("\n");
+
+  const buffer = extractImageFromRollout(rollout);
+  assert.ok(buffer);
+  assert.ok(buffer.equals(ONE_PX_PNG));
+});
+
+test("extractImageFromRollout reads the old image_generation_call schema", () => {
+  const rollout = JSON.stringify({
+    type: "response_item",
+    payload: { type: "image_generation_call", result: ONE_PX_PNG_B64 }
+  });
+  assert.ok(extractImageFromRollout(rollout).equals(ONE_PX_PNG));
+});
+
+test("extractImageFromRollout reads a function_call_output data: URL", () => {
+  const rollout = JSON.stringify({
+    type: "response_item",
+    payload: {
+      type: "function_call_output",
+      output: [
+        { type: "input_image", image_url: `data:image/png;base64,${ONE_PX_PNG_B64}`, detail: "high" },
+        { type: "input_text", text: "Generated images are saved to ..." }
+      ]
     }
   });
+  assert.ok(extractImageFromRollout(rollout).equals(ONE_PX_PNG));
+});
 
-  assert.equal(status, 0);
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0].command, "imagegen");
-  assert.deepEqual(calls[0].args, [
-    "--image",
-    "a.png",
-    "--image",
-    "b.png",
-    "--image",
-    "c.png",
-    "--prompt",
-    "Prompt from stdin"
-  ]);
+test("extractImageFromRollout falls back to saved_path on disk", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-imagegen-saved-"));
+  const saved = path.join(tempDir, "call_abc.png");
+  fs.writeFileSync(saved, ONE_PX_PNG);
+
+  // No inline base64 anywhere — only saved_path points at the real file.
+  const rollout = JSON.stringify({
+    type: "event_msg",
+    payload: { type: "image_generation_end", status: "completed", saved_path: saved }
+  });
+  const buffer = extractImageFromRollout(rollout, { readFileImpl: fs.readFileSync });
+  assert.ok(buffer.equals(ONE_PX_PNG));
+});
+
+test("extractImageFromRollout returns null when nothing usable is present", () => {
+  const rollout = JSON.stringify({ type: "event_msg", payload: { type: "token_count" } });
+  assert.equal(extractImageFromRollout(rollout), null);
+});
+
+test("locateRollout finds the rollout whose filename contains the session id", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-imagegen-sess-"));
+  const dayDir = path.join(tempDir, "2026", "07", "16");
+  fs.mkdirSync(dayDir, { recursive: true });
+  const sid = "019f67c5-bfbf-7660-b2ac-5e9c8ac2fea4";
+  const target = path.join(dayDir, `rollout-2026-07-16T06-54-00-${sid}.jsonl`);
+  fs.writeFileSync(target, "{}\n");
+  fs.writeFileSync(path.join(dayDir, "rollout-2026-07-16T06-00-00-other.jsonl"), "{}\n");
+
+  assert.equal(locateRollout(tempDir, sid), target);
+});
+
+test("runCli reports a clear error when the codex CLI is missing from PATH", async () => {
+  await assert.rejects(
+    () =>
+      runCli(["prompt"], {
+        existsSyncImpl: () => true,
+        commandExistsImpl: () => false
+      }),
+    /`codex` CLI was not found on PATH/
+  );
 });
 
 test("runCli rejects missing reference image paths", async () => {
@@ -143,27 +253,69 @@ test("runCli rejects missing reference image paths", async () => {
   );
 });
 
-test("runCli reports a clear error when the imagegen CLI is missing from PATH", async () => {
+test("runCli rejects a read-only sandbox", async () => {
   await assert.rejects(
-    () =>
-      runCli(["prompt"], {
-        existsSyncImpl: () => true,
-        commandExistsImpl: () => false
-      }),
-    /Codex's `imagegen` CLI was not found on PATH/
+    () => runCli(["--sandbox", "read-only", "prompt"], { commandExistsImpl: () => true }),
+    /read-only won't register image_gen/
   );
 });
 
+test("runCli end-to-end: drives codex, extracts the PNG, and writes --out", async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-imagegen-e2e-"));
+  const codexHome = path.join(tempDir, ".codex");
+  const sessDir = path.join(codexHome, "sessions", "2026", "07", "16");
+  fs.mkdirSync(sessDir, { recursive: true });
+  const outPath = path.join(tempDir, "out.png");
+
+  const sid = "019f67c5-bfbf-7660-b2ac-5e9c8ac2fea4";
+  const rolloutFile = path.join(sessDir, `rollout-2026-07-16T06-54-00-${sid}.jsonl`);
+
+  const calls = [];
+  const spawnSyncImpl = (command, args) => {
+    calls.push({ command, args });
+    // Simulate codex: emit the session id on stdout and drop a rollout jsonl
+    // carrying the generated image as inline base64.
+    fs.writeFileSync(
+      rolloutFile,
+      `${JSON.stringify({
+        type: "event_msg",
+        payload: { type: "image_generation_end", status: "completed", result: ONE_PX_PNG_B64 }
+      })}\n`
+    );
+    return { status: 0, stdout: `session id: ${sid}\n`, stderr: "" };
+  };
+
+  const lines = [];
+  const status = await runCli(["--out", outPath, "a small test sticker"], {
+    env: { ...process.env, CODEX_HOME: codexHome },
+    commandExistsImpl: () => true,
+    spawnSyncImpl,
+    stdout: { write: (text) => lines.push(text) },
+    stderr: { write: () => {} }
+  });
+
+  assert.equal(status, 0);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].command, "codex");
+  assert.ok(calls[0].args.includes("image_generation"));
+  assert.ok(fs.existsSync(outPath));
+  assert.ok(fs.readFileSync(outPath).equals(ONE_PX_PNG));
+  // Final stdout line is the absolute path to the written image.
+  assert.equal(lines[lines.length - 1].trim(), outPath);
+  // Session rollout is cleaned up by default.
+  assert.ok(!fs.existsSync(rolloutFile));
+});
+
 test("commandExistsOnPath finds an executable in one of the PATH directories", () => {
-  const found = commandExistsOnPath("imagegen", {
-    env: { PATH: ["/no/such/dir", "/usr/bin"].join(require("node:path").delimiter) },
+  const found = commandExistsOnPath("codex", {
+    env: { PATH: ["/no/such/dir", "/usr/bin"].join(path.delimiter) },
     platform: "darwin",
-    existsSyncImpl: (candidate) => candidate === "/usr/bin/imagegen"
+    existsSyncImpl: (candidate) => candidate === "/usr/bin/codex"
   });
 
   assert.equal(found, true);
 
-  const notFound = commandExistsOnPath("imagegen", {
+  const notFound = commandExistsOnPath("codex", {
     env: { PATH: "/usr/bin" },
     platform: "darwin",
     existsSyncImpl: () => false
@@ -172,57 +324,48 @@ test("commandExistsOnPath finds an executable in one of the PATH directories", (
   assert.equal(notFound, false);
 });
 
-test("CLI entrypoint works with a fake imagegen binary", () => {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-imagegen-test-"));
+test("CLI entrypoint works with a fake codex binary", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-imagegen-bin-"));
   const fakeBinDir = path.join(tempDir, "bin");
   fs.mkdirSync(fakeBinDir);
+  const codexHome = path.join(tempDir, ".codex");
 
-  const logPath = path.join(tempDir, "imagegen-log.json");
-  const fakeImagegen = path.join(fakeBinDir, "imagegen");
+  const sid = "019f67c5-bfbf-7660-b2ac-5e9c8ac2fea4";
+  const fakeCodex = path.join(fakeBinDir, "codex");
   fs.writeFileSync(
-    fakeImagegen,
+    fakeCodex,
     `#!/usr/bin/env node
 const fs = require("node:fs");
-fs.writeFileSync(process.env.FAKE_IMAGEGEN_LOG, JSON.stringify(process.argv.slice(2)));
+const path = require("node:path");
+const sid = "${sid}";
+const sessDir = path.join(process.env.CODEX_HOME, "sessions", "2026", "07", "16");
+fs.mkdirSync(sessDir, { recursive: true });
+fs.writeFileSync(
+  path.join(sessDir, "rollout-2026-07-16T06-54-00-" + sid + ".jsonl"),
+  JSON.stringify({ type: "event_msg", payload: { type: "image_generation_end", status: "completed", result: "${ONE_PX_PNG_B64}" } }) + "\\n"
+);
+process.stdout.write("session id: " + sid + "\\n");
 `,
     { mode: 0o755 }
   );
 
-  const firstRef = path.join(tempDir, "first.png");
-  const secondRef = path.join(tempDir, "second.png");
-  fs.writeFileSync(firstRef, "x");
-  fs.writeFileSync(secondRef, "x");
-
+  const outPath = path.join(tempDir, "out.png");
   const result = spawnSync(
     "node",
-    [
-      path.resolve(__dirname, "../bin/codex-imagegen.js"),
-      "--image",
-      firstRef,
-      "--images",
-      secondRef,
-      "--prompt",
-      "Integration prompt"
-    ],
+    [path.resolve(__dirname, "../bin/codex-imagegen.js"), "--out", outPath, "--prompt", "Integration prompt"],
     {
       cwd: path.resolve(__dirname, ".."),
       env: {
         ...process.env,
         PATH: `${fakeBinDir}${path.delimiter}${process.env.PATH}`,
-        FAKE_IMAGEGEN_LOG: logPath
+        CODEX_HOME: codexHome
       },
       encoding: "utf8"
     }
   );
 
   assert.equal(result.status, 0, result.stderr);
-  const loggedArgs = JSON.parse(fs.readFileSync(logPath, "utf8"));
-  assert.deepEqual(loggedArgs, [
-    "--image",
-    firstRef,
-    "--image",
-    secondRef,
-    "--prompt",
-    "Integration prompt"
-  ]);
+  assert.ok(fs.existsSync(outPath));
+  assert.ok(fs.readFileSync(outPath).equals(ONE_PX_PNG));
+  assert.equal(result.stdout.trim().split("\n").pop(), outPath);
 });

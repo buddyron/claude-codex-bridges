@@ -1,7 +1,7 @@
 {
   "name": "codex-imagegen",
-  "version": "0.1.1",
-  "description": "Generate images through Codex's local imagegen CLI.",
+  "version": "0.2.0",
+  "description": "Generate images through Codex's built-in image_gen tool.",
   "license": "MIT",
   "author": "Ron",
   "homepage": "https://github.com/buddyron/claude-codex-bridges/tree/main/plugins/codex-imagegen#readme",
