@@ -45,6 +45,19 @@ Use either:
 
 Both forms can be combined, and the wrapper preserves the order.
 
+## A note on `--size`
+
+Codex's built-in `image_gen` tool has **no size parameter**. It routes to
+`gpt-image-2-codex` with `size=auto` and rounds output to an internal ~1.5MP
+budget, so requests are returned at non-standard dimensions (e.g. 1254×1254)
+regardless of what you ask for — this is an upstream limitation
+([openai/codex#28723](https://github.com/openai/codex/issues/28723),
+[#19175](https://github.com/openai/codex/issues/19175)).
+
+`--size` is therefore an **aspect-ratio / framing hint only** (square vs
+landscape vs portrait comes through; exact pixels do not). If you need precise
+dimensions, resize the generated PNG afterward.
+
 ## Environment
 
 - `CODEX_HOME` — Codex home dir (default `~/.codex`)

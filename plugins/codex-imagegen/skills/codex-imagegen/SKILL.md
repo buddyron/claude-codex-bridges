@@ -48,6 +48,10 @@ Both forms can be mixed in the same call. The wrapper preserves the order.
 3. Pass through optional flags such as `--size`, `--quality`, `--style`, or `--dry-run`.
 4. Return the generated file path or the final JSON line if `--json` was used.
 
+Note: `--size` is only an aspect-ratio / framing hint. Codex's built-in
+image_gen has no size control and rounds output to ~1.5MP (e.g. 1254×1254), so
+exact pixel dimensions are not guaranteed — resize afterward if you need them.
+
 ## Examples
 
 ```bash

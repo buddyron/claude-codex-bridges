@@ -20,7 +20,10 @@ OPTIONS
   -o, --out FILE      Output PNG path. Default: ./<prompt-slug>-<timestamp>.png
   -i, --image FILE    Attach one reference image. Repeatable.
       --images LIST   Attach multiple images from a comma-separated or newline-separated list.
-      --size SIZE     Output size hint, for example 1536x1024.
+      --size SIZE     Aspect-ratio / framing hint, e.g. 1536x1024. NOTE: Codex's
+                      built-in image_gen has no size control — it rounds to an
+                      internal ~1.5MP budget (size=auto), so exact pixel
+                      dimensions are NOT guaranteed. Resize afterward if needed.
       --quality Q     Detail hint: low | medium | high.
       --style TEXT    Extra style hint to forward to image_gen.
       --model NAME    Codex model to run (default: gpt-5.5). Must be image-capable.
@@ -269,9 +272,11 @@ function composePrompt({ prompt, images = [], size, quality, style }) {
     prompt
   ];
   if (size) {
-    // Instruct the model to pass the size to the tool; a free-text "Size:" line
-    // is treated as a weak hint and often ignored.
-    lines.push(`Call image_gen with a size of ${size} (use the nearest supported size if that exact size is unavailable).`);
+    // Codex's built-in image_gen has no size parameter — it routes to
+    // gpt-image-2-codex with size=auto and rounds to an internal ~1.5MP budget
+    // (see openai/codex#28723, #19175). Only the aspect ratio / framing is
+    // steerable via the prompt; exact pixel dimensions are not.
+    lines.push(`Target aspect ratio / framing: ${size} (the tool sets the exact pixel size).`);
   }
   if (quality) {
     lines.push(`Quality / detail: ${quality}`);

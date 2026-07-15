@@ -65,8 +65,9 @@ test("composePrompt instructs a single generation and switches wording for refer
   assert.match(plain, /image_gen tool exactly once/);
   assert.match(plain, /Do NOT save files/);
   assert.match(plain, /SPEC:\na red fox/);
-  // Size is phrased as an instruction to call image_gen with that size.
-  assert.match(plain, /Call image_gen with a size of 1024x1024/);
+  // Size is conveyed as an aspect-ratio / framing hint (exact pixels are not
+  // controllable through the built-in image_gen tool).
+  assert.match(plain, /Target aspect ratio \/ framing: 1024x1024/);
 
   const withRefs = composePrompt({ prompt: "same fox", images: ["ref.png"] });
   assert.match(withRefs, /only as references/);
